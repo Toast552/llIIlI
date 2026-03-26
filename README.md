@@ -132,11 +132,12 @@ Two browser options, each for different use cases:
 
 CDP controls your actual browser — already logged into everything. No re-authenticating.
 
-## Using With Claude Max
+## When to Use This
 
-- **Online:** Claude Code with Anthropic API (fastest, most capable)
-- **Offline/Private:** Double-click `Claude Local` (48 tok/s, fully private)
-- **From phone:** Dispatch or iMessage to control either mode
+- **Offline:** No internet? Double-click `Claude Local` — full AI coding on your Mac
+- **Privacy:** Sensitive code or client work that can't touch the cloud
+- **Cost:** $0/month for unlimited local AI usage
+- **From phone:** Dispatch or iMessage to control your local AI remotely
 
 ## Project Structure
 
