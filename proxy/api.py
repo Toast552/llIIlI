@@ -16,6 +16,8 @@ Runs on port 4001. Expects MLX server on 4000 and Brave on 9222.
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -23,27 +25,166 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 import urllib.request
 import websockets as ws_lib
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 
+HOME = str(Path.home())
 MLX_URL = os.environ.get("MLX_URL", "http://localhost:4000")
 CDP_URL = os.environ.get("CDP_URL", "http://127.0.0.1:9222")
 MODEL = os.environ.get("MLX_MODEL_NAME", "claude-sonnet-4-6")
 API_PORT = int(os.environ.get("ORCHESTRATOR_PORT", "4001"))
+API_HOST = os.environ.get("ORCHESTRATOR_HOST", "127.0.0.1")  # localhost ONLY
 MAX_STEPS = int(os.environ.get("MAX_STEPS", "30"))
 MAX_CONTEXT_TOKENS = int(os.environ.get("MAX_CONTEXT_TOKENS", "32000"))
 
-STUDIO_RECORD_APP = "/Users/dtribe/Desktop/Studio Record.app"
+STUDIO_RECORD_APP = os.path.join(HOME, "Desktop", "Studio Record.app")
+
+# ─── Security ────────────────────────────────────────────────────────────────
+
+API_KEY_FILE = os.path.join(HOME, ".claude", "orchestrator.key")
+API_KEY = ""
+try:
+    with open(API_KEY_FILE) as f:
+        API_KEY = f.read().strip()
+except FileNotFoundError:
+    print(f"WARNING: No API key found at {API_KEY_FILE}")
+    print("  Generate one: python3 -c \"import secrets; print(secrets.token_urlsafe(32))\" > ~/.claude/orchestrator.key")
+    print("  chmod 600 ~/.claude/orchestrator.key")
+
+# Rate limiting: max requests per minute per endpoint category
+RATE_LIMITS = {
+    "tasks": 20,       # 20 task submissions per minute
+    "tools": 60,       # 60 direct tool calls per minute
+    "status": 120,     # 120 status checks per minute
+}
+_rate_counters: dict[str, list[float]] = defaultdict(list)
+
+# Allowed apps that can be opened (prevent launching arbitrary binaries)
+ALLOWED_APPS = {
+    "Studio Record", "Brave Browser", "Safari", "Finder", "Terminal",
+    "Notes", "TextEdit", "Preview", "Calculator", "System Settings",
+}
+# Also allow .app paths under user's Desktop or Applications
+ALLOWED_APP_DIRS = [
+    os.path.join(HOME, "Desktop"),
+    os.path.join(HOME, "Applications"),
+    "/Applications",
+]
+
+# Blocked shell patterns (prevent destructive or exfiltration commands)
+BLOCKED_COMMANDS = [
+    r'\brm\s+-rf\s+/',             # rm -rf /
+    r'\brm\s+-rf\s+~',             # rm -rf ~
+    r'\bmkfs\b',                    # format disk
+    r'\bdd\s+if=',                  # disk overwrite
+    r'\bcurl\b.*\|\s*sh',          # curl pipe to shell
+    r'\bwget\b.*\|\s*sh',          # wget pipe to shell
+    r'\bnc\s+-',                    # netcat
+    r'\bssh\b',                     # ssh
+    r'\bscp\b',                     # scp
+    r'\bsftp\b',                    # sftp
+    r'\btelnet\b',                  # telnet
+    r'\bopen\s+vnc://',            # VNC
+    r'\bscreensharing\b',          # screen sharing
+    r'\bsudo\b',                    # privilege escalation
+    r'\bchmod\s+777\b',            # insecure permissions
+    r'\bchown\b.*root',            # ownership change
+    r'\blaunchctl\b',              # daemon control
+    r'\bdefaults\s+write\b.*com\.apple', # system defaults
+    r'\bnmap\b',                    # port scanning
+    r'\bpasswd\b',                  # password change
+    r'/etc/shadow',                 # sensitive files
+    r'/etc/passwd',
+    r'\.ssh/',
+    r'\.gnupg/',
+    r'\bkeychain\b',
+    r'security\s+find',            # keychain access
+    r'security\s+dump',
+]
+
+# Blocked AppleScript patterns
+BLOCKED_APPLESCRIPT = [
+    r'do shell script',             # shell escape from AppleScript
+    r'keystroke.*password',         # typing passwords
+    r'System Events.*login',        # login manipulation
+    r'System Preferences.*Security', # security settings
+    r'delete\s+every',             # mass deletion
+    r'keychain',                    # keychain access
+]
+
+
+def check_api_key(request: Request) -> None:
+    """Verify the API key from the Authorization header."""
+    if not API_KEY:
+        raise HTTPException(503, "Server has no API key configured. See server logs.")
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(401, "Missing Authorization: Bearer <key> header")
+    provided = auth[7:]
+    # Constant-time comparison to prevent timing attacks
+    if not hmac.compare_digest(provided.encode(), API_KEY.encode()):
+        raise HTTPException(403, "Invalid API key")
+
+
+def check_rate_limit(category: str) -> None:
+    """Simple sliding window rate limiter."""
+    now = time.time()
+    window = _rate_counters[category]
+    # Remove entries older than 60 seconds
+    _rate_counters[category] = [t for t in window if now - t < 60]
+    if len(_rate_counters[category]) >= RATE_LIMITS.get(category, 60):
+        raise HTTPException(429, f"Rate limit exceeded: max {RATE_LIMITS[category]} requests/minute for {category}")
+    _rate_counters[category].append(now)
+
+
+def validate_app_path(app_name_or_path: str) -> str:
+    """Validate that an app is in the allowed list or allowed directories."""
+    # Check by name
+    if app_name_or_path in ALLOWED_APPS:
+        return app_name_or_path
+
+    # Check by path — must be a .app under allowed directories
+    resolved = os.path.realpath(os.path.expanduser(app_name_or_path))
+    if resolved.endswith(".app"):
+        for allowed_dir in ALLOWED_APP_DIRS:
+            if resolved.startswith(os.path.realpath(allowed_dir)):
+                return resolved
+
+    raise HTTPException(403, f"App not allowed: {app_name_or_path}. Add it to ALLOWED_APPS or place it in an allowed directory.")
+
+
+def validate_command(command: str) -> str:
+    """Check a shell command against the blocklist."""
+    for pattern in BLOCKED_COMMANDS:
+        if re.search(pattern, command, re.IGNORECASE):
+            raise HTTPException(403, f"Blocked command pattern: {pattern}")
+    # Max command length
+    if len(command) > 2000:
+        raise HTTPException(400, "Command too long (max 2000 chars)")
+    return command
+
+
+def validate_applescript(code: str) -> str:
+    """Check AppleScript against the blocklist."""
+    for pattern in BLOCKED_APPLESCRIPT:
+        if re.search(pattern, code, re.IGNORECASE):
+            raise HTTPException(403, f"Blocked AppleScript pattern: {pattern}")
+    if len(code) > 5000:
+        raise HTTPException(400, "AppleScript too long (max 5000 chars)")
+    return code
 
 
 # ─── Models ──────────────────────────────────────────────────────────────────
@@ -741,16 +882,29 @@ async def execute_task(task: TaskState):
 
                 # ── macOS tools ──
                 elif tool == "open_app":
-                    result = await MacOS.open_app(args.get("path_or_name", args.get("name", "")))
+                    app_name = args.get("path_or_name", args.get("name", ""))
+                    try:
+                        validated = validate_app_path(app_name)
+                        result = await MacOS.open_app(validated)
+                    except HTTPException as e:
+                        result = f"Blocked: {e.detail}"
 
                 elif tool == "close_app":
                     result = await MacOS.close_app(args.get("name", ""))
 
                 elif tool == "applescript":
-                    result = await MacOS.applescript(args.get("code", ""))
+                    try:
+                        code = validate_applescript(args.get("code", ""))
+                        result = await MacOS.applescript(code)
+                    except HTTPException as e:
+                        result = f"Blocked: {e.detail}"
 
                 elif tool == "run_command":
-                    result = await MacOS.run_command(args.get("command", ""))
+                    try:
+                        command = validate_command(args.get("command", ""))
+                        result = await MacOS.run_command(command)
+                    except HTTPException as e:
+                        result = f"Blocked: {e.detail}"
 
                 elif tool == "notification":
                     result = await MacOS.notification(args.get("title", ""), args.get("message", ""))
@@ -838,17 +992,19 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:*", "http://127.0.0.1:*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
 @app.get("/status")
-async def status():
+async def status(request: Request):
     """Server health and capability check."""
+    check_api_key(request)
+    check_rate_limit("status")
     # Check MLX
     mlx_ok = False
     try:
@@ -878,8 +1034,10 @@ async def status():
 
 
 @app.post("/tasks")
-async def create_task(req: TaskRequest):
+async def create_task(req: TaskRequest, request: Request):
     """Submit a natural language task for AI orchestration."""
+    check_api_key(request)
+    check_rate_limit("tasks")
     task_id = uuid.uuid4().hex[:12]
     task = TaskState(task_id, req.prompt, req.timeout)
     tasks[task_id] = task
@@ -891,16 +1049,19 @@ async def create_task(req: TaskRequest):
 
 
 @app.get("/tasks/{task_id}")
-async def get_task(task_id: str):
+async def get_task(task_id: str, request: Request):
     """Get task status and results."""
+    check_api_key(request)
+    check_rate_limit("status")
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
     return tasks[task_id].to_dict()
 
 
 @app.post("/tasks/{task_id}/stop")
-async def stop_task(task_id: str):
+async def stop_task(task_id: str, request: Request):
     """Cancel a running task."""
+    check_api_key(request)
     if task_id not in tasks:
         raise HTTPException(404, "Task not found")
     task = tasks[task_id]
@@ -911,16 +1072,22 @@ async def stop_task(task_id: str):
 
 
 @app.get("/tasks")
-async def list_tasks():
+async def list_tasks(request: Request):
     """List all tasks."""
+    check_api_key(request)
+    check_rate_limit("status")
     return [t.to_dict() for t in tasks.values()]
 
 
 # ─── WebSocket for real-time progress ────────────────────────────────────────
 
 @app.websocket("/ws/tasks/{task_id}")
-async def ws_task(websocket: WebSocket, task_id: str):
-    """Stream real-time task progress."""
+async def ws_task(websocket: WebSocket, task_id: str, key: str = ""):
+    """Stream real-time task progress. Pass API key as ?key= query param."""
+    # Authenticate WebSocket via query parameter
+    if not API_KEY or not hmac.compare_digest(key.encode(), API_KEY.encode()):
+        await websocket.close(code=4003, reason="Invalid or missing API key (?key=)")
+        return
     if task_id not in tasks:
         await websocket.close(code=4004, reason="Task not found")
         return
@@ -934,29 +1101,36 @@ async def ws_task(websocket: WebSocket, task_id: str):
 
     try:
         while True:
-            # Keep connection alive, listen for client messages
             data = await websocket.receive_text()
             if data == "ping":
                 await websocket.send_json({"type": "pong"})
     except WebSocketDisconnect:
-        task._ws_clients.remove(websocket)
+        if websocket in task._ws_clients:
+            task._ws_clients.remove(websocket)
 
 
 # ─── Direct tool endpoints ──────────────────────────────────────────────────
 
 @app.post("/tools/browser/navigate")
-async def tool_browser_navigate(req: ToolRequest):
+async def tool_browser_navigate(req: ToolRequest, request: Request):
     """Navigate Brave to a URL."""
+    check_api_key(request)
+    check_rate_limit("tools")
+    url = req.args.get("url", "")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "URL must start with http:// or https://")
     cdp = CDP()
     await cdp.connect()
-    result = await cdp.navigate(req.args.get("url", ""))
+    result = await cdp.navigate(url)
     await cdp.close()
     return {"result": result}
 
 
 @app.post("/tools/browser/snapshot")
-async def tool_browser_snapshot():
+async def tool_browser_snapshot(request: Request):
     """Get current page elements."""
+    check_api_key(request)
+    check_rate_limit("tools")
     cdp = CDP()
     await cdp.connect()
     result = await cdp.snapshot()
@@ -965,8 +1139,10 @@ async def tool_browser_snapshot():
 
 
 @app.post("/tools/browser/click")
-async def tool_browser_click(req: ToolRequest):
+async def tool_browser_click(req: ToolRequest, request: Request):
     """Click a page element by UID."""
+    check_api_key(request)
+    check_rate_limit("tools")
     cdp = CDP()
     await cdp.connect()
     result = await cdp.click(str(req.args.get("uid", "")))
@@ -975,57 +1151,81 @@ async def tool_browser_click(req: ToolRequest):
 
 
 @app.post("/tools/browser/js")
-async def tool_browser_js(req: ToolRequest):
+async def tool_browser_js(req: ToolRequest, request: Request):
     """Execute JavaScript on the page."""
+    check_api_key(request)
+    check_rate_limit("tools")
+    code = req.args.get("code", "")
+    if len(code) > 10000:
+        raise HTTPException(400, "JavaScript too long (max 10000 chars)")
     cdp = CDP()
     await cdp.connect()
-    result = await cdp.js(req.args.get("code", ""))
+    result = await cdp.js(code)
     await cdp.close()
     return {"result": result}
 
 
 @app.post("/tools/macos/open")
-async def tool_macos_open(req: ToolRequest):
-    """Open a macOS application."""
-    result = await MacOS.open_app(req.args.get("path_or_name", req.args.get("name", "")))
+async def tool_macos_open(req: ToolRequest, request: Request):
+    """Open a macOS application (from allowed list only)."""
+    check_api_key(request)
+    check_rate_limit("tools")
+    app_name = req.args.get("path_or_name", req.args.get("name", ""))
+    validated = validate_app_path(app_name)
+    result = await MacOS.open_app(validated)
     return {"result": result}
 
 
 @app.post("/tools/macos/close")
-async def tool_macos_close(req: ToolRequest):
+async def tool_macos_close(req: ToolRequest, request: Request):
     """Close a macOS application."""
+    check_api_key(request)
+    check_rate_limit("tools")
     result = await MacOS.close_app(req.args.get("name", ""))
     return {"result": result}
 
 
 @app.post("/tools/macos/applescript")
-async def tool_macos_applescript(req: ToolRequest):
-    """Run AppleScript."""
-    result = await MacOS.applescript(req.args.get("code", ""))
+async def tool_macos_applescript(req: ToolRequest, request: Request):
+    """Run AppleScript (validated against blocklist)."""
+    check_api_key(request)
+    check_rate_limit("tools")
+    code = validate_applescript(req.args.get("code", ""))
+    result = await MacOS.applescript(code)
     return {"result": result}
 
 
 @app.post("/tools/macos/command")
-async def tool_macos_command(req: ToolRequest):
-    """Run a shell command."""
-    result = await MacOS.run_command(req.args.get("command", ""))
+async def tool_macos_command(req: ToolRequest, request: Request):
+    """Run a shell command (validated against blocklist)."""
+    check_api_key(request)
+    check_rate_limit("tools")
+    command = validate_command(req.args.get("command", ""))
+    result = await MacOS.run_command(command)
     return {"result": result}
 
 
 @app.post("/tools/record/start")
-async def tool_record_start(req: ToolRequest):
+async def tool_record_start(req: ToolRequest, request: Request):
     """Start screen recording."""
+    check_api_key(request)
+    check_rate_limit("tools")
     duration = req.args.get("duration")
     if duration:
-        result = await Recorder.start_timed(int(duration))
+        d = int(duration)
+        if d > 3600:
+            raise HTTPException(400, "Max recording duration is 3600 seconds (1 hour)")
+        result = await Recorder.start_timed(d)
     else:
         result = await Recorder.start()
     return {"result": result}
 
 
 @app.post("/tools/record/stop")
-async def tool_record_stop():
+async def tool_record_stop(request: Request):
     """Stop screen recording."""
+    check_api_key(request)
+    check_rate_limit("tools")
     result = await Recorder.stop()
     return {"result": result}
 
@@ -1041,4 +1241,4 @@ if __name__ == "__main__":
     print("║  All tools, one endpoint                      ║")
     print("╚═══════════════════════════════════════════════╝")
 
-    uvicorn.run(app, host="0.0.0.0", port=API_PORT, log_level="info")
+    uvicorn.run(app, host=API_HOST, port=API_PORT, log_level="info")
