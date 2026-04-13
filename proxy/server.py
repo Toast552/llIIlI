@@ -796,7 +796,9 @@ def generate_response(body):
 
     if cache_hit_len > 0:
         # Trim cache back to the shared prefix, then only prefill the delta
-        cache_offset = _prompt_cache[0].offset  # total tokens in cache (prompt + gen)
+        #cache_offset = _prompt_cache[0].offset  # total tokens in cache (prompt + gen)
+        # Try .step instead of .offset
+        cache_offset = _prompt_cache[0].step if hasattr(_prompt_cache[0], 'step') else 0
         trim_amount = cache_offset - cache_hit_len
         if trim_amount > 0:
             for c in _prompt_cache:
