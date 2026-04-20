@@ -714,21 +714,21 @@ We didn't start here. We went through three generations in one night:
 
 ## 🧩 The Complete Local-First Stack
 
-`claude-code-local` is the **brain** — the MLX Anthropic server, the launcher lineup, the tool-call translation layer. For the full ambient-computing experience, it pairs with three sibling repos that handle the other parts of the loop. Each stands alone; together they form a **local-first ambient computing stack** that never sends a keystroke, a voice clip, or a page load to the cloud.
+`claude-code-local` is the **brain** — MLX Anthropic server, launcher lineup, tool-call translation. It pairs with three sibling repos to form a **local-first ambient computing stack** that never sends a keystroke, a voice clip, or a page load to the cloud. Each repo stands alone.
 
-| | 🤖 **claude-code-local** *(you are here)* | 🎤 **NarrateClaude** | 🌐 **browser-agent** | 📱 **claude-screen-to-phone** |
-|---|:---:|:---:|:---:|:---:|
-| **Role** | Brain | Ears + Mouth | Hands | Remote / Phone |
-| **What it does** | MLX + Gemma / Llama / Qwen · Anthropic API server · tool-call parsing | Talk to Claude, hear replies in your cloned voice — on-device both directions | Drives Brave via Chrome DevTools Protocol — iframes + Shadow DOM | iMessage bridge — text the Mac from anywhere, get screenshots and video back |
-| **Repo** | [nicedreamzapp/claude-code-local](https://github.com/nicedreamzapp/claude-code-local) | [nicedreamzapp/NarrateClaude](https://github.com/nicedreamzapp/NarrateClaude) | [nicedreamzapp/browser-agent](https://github.com/nicedreamzapp/browser-agent) | [nicedreamzapp/claude-screen-to-phone](https://github.com/nicedreamzapp/claude-screen-to-phone) |
+#### 🤖 claude-code-local — **Brain** *(you are here)*
+MLX + Gemma 31B / Llama 70B / Qwen 122B · Anthropic API server · tool-call parsing · prompt cache. Zero cloud, 65 tok/s on Apple Silicon.
 
-| Want to… | Clone… |
-|---|---|
-| 🤖 Run Claude Code against a local model — keyboard in, text out | Just this repo |
-| 🎤 Talk to Claude Code and hear it narrate back in your own voice | This repo **+** [`NarrateClaude`](https://github.com/nicedreamzapp/NarrateClaude) |
-| 🌐 Have Claude Code drive a real browser autonomously | This repo **+** [`browser-agent`](https://github.com/nicedreamzapp/browser-agent) |
-| 📱 Drive Claude Code from your phone — anywhere, any time | This repo **+** [`claude-screen-to-phone`](https://github.com/nicedreamzapp/claude-screen-to-phone) |
-| 🪴 All of it. Ambient computing on one Mac, nothing in the cloud | All four |
+#### 🎤 [NarrateClaude](https://github.com/nicedreamzapp/NarrateClaude) — **Ears + Mouth**
+Talk to Claude, hear replies in your cloned voice — both directions on-device. Fully hands-free loop using Apple SFSpeech + cloned-voice TTS.
+
+#### 🌐 [browser-agent](https://github.com/nicedreamzapp/browser-agent) — **Hands**
+Drives a real Brave browser via Chrome DevTools Protocol. Handles iframes, Shadow DOM, ProseMirror.
+
+#### 📱 [claude-screen-to-phone](https://github.com/nicedreamzapp/claude-screen-to-phone) — **Remote**
+Turns your iPhone into a full Claude Code terminal. Text any command — git, shell, file edits, deploys, browser tasks — and get back whatever Claude produces (text, screenshots, screen recordings, produced videos) right in Messages. Works over iMessage — no bots, no third-party apps, no cloud relay.
+
+**Pair any combination. All four = ambient computing on one Mac, nothing in the cloud.**
 
 ### 🪴 Why this matters — the ambient-computing angle
 
