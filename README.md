@@ -84,20 +84,9 @@
 
 ---
 
-> ## 🧩 You're looking at the **BRAIN** of a three-repo local-first ambient-computing stack
+> ## 🧩 This repo is the **BRAIN** of a 4-part local-first ambient-computing stack
 >
-> Three repos, one Mac. Pair them for the full experience:
->
-> **🤖 BRAIN · `claude-code-local`** *(this repo — you are here 👈)*
-> Runs local AI (Gemma / Llama / Qwen) + Claude Code, fully on-device.
->
-> **🎤 EARS + MOUTH · [`NarrateClaude`](https://github.com/nicedreamzapp/NarrateClaude)**
-> Talk to it, hear replies in your cloned voice — both directions on-device.
->
-> **🌐 HANDS · [`browser-agent`](https://github.com/nicedreamzapp/browser-agent)**
-> Drives a real Brave browser via Chrome DevTools Protocol — handles iframes, Shadow DOM, ProseMirror.
->
-> 👉 **[See how all three fit together below](#-the-complete-local-first-stack)**
+> Brain (here) · 🎤 Ears+Mouth · 🌐 Hands · 📱 Phone. Each repo stands alone; together they take Claude Code off the keyboard and off the screen. **[Jump to the stack diagram →](#-the-complete-local-first-stack)**
 >
 > 🖥️ **More of my open-source software:** [**nicedreamzwholesale.com/software**](https://nicedreamzwholesale.com/software/)
 
@@ -239,13 +228,7 @@ This is the part we're proudest of. **Your code never leaves your Mac.** Not for
 | **iMessage scripts** | Pure shell + AppleScript | localhost only (Studio Record port 17494) | ✅ Safe |
 | **Claude Code CLI** | Anthropic (closed-source binary) | **1 non-blocking** startup call to `api.anthropic.com` — inference still stays 100% local even if the call is firewalled | ⚠️ Disclosed |
 
-> ℹ️ **On that one exception:** Claude Code's own binary attempts a startup handshake to `api.anthropic.com` (likely version/session check). We can't suppress it — it's baked into Anthropic's closed-source CLI. **It's non-blocking**: block it at the firewall and Claude Code still works fine with your local model. Your prompts, code, and completions never leave the machine. Verified with `lsof -i -P` once the model is loaded.
-
-### ⚠️ Transparency Note: Claude Code's Own Binary
-
-Claude Code is Anthropic's closed-source CLI. On startup, it may attempt a **non-blocking** connection to `api.anthropic.com` (likely session validation or version check) — even when `ANTHROPIC_BASE_URL` points to localhost. **This does not affect your code or prompts** — all inference still goes to the local MLX model. If you're offline or a firewall blocks the call, Claude Code still works fine.
-
-Our code (server.py, launchers, scripts) makes **zero** outbound connections. But we can't suppress the startup behavior of a closed-source binary we don't control. If full network isolation matters to you, use a firewall rule to block `api.anthropic.com` — everything will still work.
+> ℹ️ **On that one exception:** Claude Code's own binary attempts a non-blocking startup handshake to `api.anthropic.com` (likely version/session check). We can't suppress it — it's baked into Anthropic's closed-source CLI. Firewall it and Claude Code still works fine with your local model. Your prompts, code, and completions never leave the machine. Verified with `lsof -i -P` once the model is loaded. Our code (server.py, launchers, scripts) makes **zero** outbound connections.
 
 ### 🚫 What We Ripped Out
 
@@ -287,17 +270,7 @@ How long to ask Claude Code to write a function:
 | 😐 llama.cpp + Proxy | 133 s |
 | 🔥 **MLX Native (no proxy)** | **17.6 s** |
 
-> **7.5× faster ⚡** — one change (killing the proxy) produced the entire delta.
-
-### 📋 Three-Generation Side-by-Side
-
-| | 🐌 Ollama | 🏃 llama.cpp + TurboQuant | 🚀 **MLX Native (ours)** |
-|---|:---:|:---:|:---:|
-| **Speed** | 30 tok/s | 41 tok/s | **65 tok/s** |
-| **Claude Code task** | 133s | 133s | **17.6s** |
-| **Needs a proxy?** | ❌ Yes | ❌ Yes | ✅ **No** |
-| **Lines of code** | N/A | N/A (C++ fork) | **~800 Python** |
-| **Apple native?** | ❌ Generic | ❌ Ported | ✅ **MLX** |
+> **7.5× faster ⚡** — one change (killing the proxy) produced the entire delta. ~800 lines of Python, no C++ fork, no generic inference backend.
 
 ### 🥊 Lineup Comparison
 
@@ -741,20 +714,21 @@ We didn't start here. We went through three generations in one night:
 
 ## 🧩 The Complete Local-First Stack
 
-`claude-code-local` is the **brain** — the MLX Anthropic server, the launcher lineup, the tool-call translation layer. For the full ambient-computing experience, it pairs with two sibling projects that handle the other parts of the loop. Each repo stands alone; together they form a **local-first ambient computing stack** that never sends a keystroke, a voice clip, or a page load to the cloud.
+`claude-code-local` is the **brain** — the MLX Anthropic server, the launcher lineup, the tool-call translation layer. For the full ambient-computing experience, it pairs with three sibling repos that handle the other parts of the loop. Each stands alone; together they form a **local-first ambient computing stack** that never sends a keystroke, a voice clip, or a page load to the cloud.
 
-| | 🎤 **NarrateClaude** | 🤖 **claude-code-local** *(this repo)* | 🌐 **browser-agent** |
-|---|:---:|:---:|:---:|
-| **Role** | Ears + Mouth | Brain | Hands |
-| **Tech** | Apple SFSpeech · AppleScript inject · cloned-voice TTS | MLX + Gemma / Llama / Qwen · Anthropic API server · tool-call parser (×3) · code mode · prompt cache | Chrome DevTools Protocol · iframes + Shadow DOM · Brave control · snapshot + click + type |
-| **Repo** | [nicedreamzapp/NarrateClaude](https://github.com/nicedreamzapp/NarrateClaude) | [nicedreamzapp/claude-code-local](https://github.com/nicedreamzapp/claude-code-local) | [nicedreamzapp/browser-agent](https://github.com/nicedreamzapp/browser-agent) |
+| | 🤖 **claude-code-local** *(you are here)* | 🎤 **NarrateClaude** | 🌐 **browser-agent** | 📱 **claude-screen-to-phone** |
+|---|:---:|:---:|:---:|:---:|
+| **Role** | Brain | Ears + Mouth | Hands | Remote / Phone |
+| **What it does** | MLX + Gemma / Llama / Qwen · Anthropic API server · tool-call parsing | Talk to Claude, hear replies in your cloned voice — on-device both directions | Drives Brave via Chrome DevTools Protocol — iframes + Shadow DOM | iMessage bridge — text the Mac from anywhere, get screenshots and video back |
+| **Repo** | [nicedreamzapp/claude-code-local](https://github.com/nicedreamzapp/claude-code-local) | [nicedreamzapp/NarrateClaude](https://github.com/nicedreamzapp/NarrateClaude) | [nicedreamzapp/browser-agent](https://github.com/nicedreamzapp/browser-agent) | [nicedreamzapp/claude-screen-to-phone](https://github.com/nicedreamzapp/claude-screen-to-phone) |
 
 | Want to… | Clone… |
 |---|---|
 | 🤖 Run Claude Code against a local model — keyboard in, text out | Just this repo |
 | 🎤 Talk to Claude Code and hear it narrate back in your own voice | This repo **+** [`NarrateClaude`](https://github.com/nicedreamzapp/NarrateClaude) |
 | 🌐 Have Claude Code drive a real browser autonomously | This repo **+** [`browser-agent`](https://github.com/nicedreamzapp/browser-agent) |
-| 🪴 All of it. Ambient computing on one Mac, nothing in the cloud | All three |
+| 📱 Drive Claude Code from your phone — anywhere, any time | This repo **+** [`claude-screen-to-phone`](https://github.com/nicedreamzapp/claude-screen-to-phone) |
+| 🪴 All of it. Ambient computing on one Mac, nothing in the cloud | All four |
 
 ### 🪴 Why this matters — the ambient-computing angle
 
